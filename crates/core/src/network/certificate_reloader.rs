@@ -71,11 +71,16 @@ impl CertificateReloader {
                 let tx = tx_clone.clone();
                 let configs = configs_clone.clone();
                 
-                tokio::spawn(async move {
-                    if let Err(e) = handle_file_event(result, tx, configs).await {
-                        error!("Error handling certificate file change: {}", e);
-                    }
-                });
+                // Only spawn if there's an active runtime
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        if let Err(e) = handle_file_event(result, tx, configs).await {
+                            error!("Error handling certificate file change: {}", e);
+                        }
+                    });
+                } else {
+                    debug!("Ignoring file event - no active Tokio runtime");
+                }
             },
         )
         .context("Failed to create file watcher")?;
