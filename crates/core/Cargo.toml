@@ -45,6 +45,8 @@ hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["server-graceful", "server"] }
 itertools = { workspace = true }
 metrics = { workspace = true }
+notify = { version = "8.0.0" }
+notify-debouncer-full = { version = "0.5" }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 parking_lot = { workspace = true }
@@ -77,6 +79,7 @@ restate-metadata-store = { workspace = true, features = ["test-util"] }
 restate-test-util = { workspace = true }
 
 googletest = { workspace = true }
+tempfile = { workspace = true }
 test-log = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true }

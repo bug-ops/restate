@@ -8,6 +8,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod certificate_reloader;
 mod compat;
 mod connection;
 mod connection_manager;
@@ -31,6 +32,7 @@ mod tracking;
 pub mod transport_connector;
 mod types;
 
+pub use certificate_reloader::{CertificateReloader, CertificateReloadEvent};
 pub use connection::{ConnectThrottle, Connection};
 pub use connection_manager::ConnectionManager;
 pub use error::*;
