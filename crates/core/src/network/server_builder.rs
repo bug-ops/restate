@@ -19,12 +19,14 @@ use tower::ServiceExt;
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::{Level, debug};
 
+use restate_types::config::{NetworkingOptions, TlsSwimlane};
 use restate_types::health::HealthStatus;
 use restate_types::net::BindAddress;
 use restate_types::protobuf::common::NodeRpcStatus;
 
 use super::multiplex::MultiplexService;
 use super::net_util::run_hyper_server;
+use super::tls_util::{create_server_tls_config, validate_tls_config};
 
 #[derive(Debug, Default)]
 pub struct NetworkServerBuilder {
@@ -69,6 +71,7 @@ impl NetworkServerBuilder {
         self,
         node_rpc_health: HealthStatus<NodeRpcStatus>,
         bind_address: &BindAddress,
+        networking_options: &NetworkingOptions,
     ) -> Result<(), anyhow::Error> {
         node_rpc_health.update(NodeRpcStatus::StartingUp);
         // Trace layer
@@ -88,12 +91,29 @@ impl NetworkServerBuilder {
                 reflection_service_builder.register_encoded_file_descriptor_set(descriptor);
         }
 
-        let server_builder = tonic::transport::Server::builder()
+        // Configure TLS for general inter-node communication
+        let tls_config = networking_options.tls.for_swimlane(TlsSwimlane::General);
+        
+        // Validate TLS configuration if enabled
+        if tls_config.enabled {
+            validate_tls_config(&tls_config)?;
+        }
+
+        let mut server_builder = tonic::transport::Server::builder()
             .layer(
                 TraceLayer::new_for_grpc()
                     .make_span_with(span_factory)
                     .on_failure(DefaultOnFailure::new().level(Level::DEBUG)),
-            )
+            );
+
+        // Add TLS configuration if enabled
+        if tls_config.enabled {
+            let server_tls_config = create_server_tls_config(&tls_config)?;
+            debug!("Configuring TLS for gRPC server");
+            server_builder = server_builder.tls_config(server_tls_config)?;
+        }
+
+        let server_builder = server_builder
             .add_routes(self.grpc_routes.unwrap_or_default())
             .add_service(reflection_service_builder.build_v1()?);
 

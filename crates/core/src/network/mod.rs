@@ -25,6 +25,7 @@ mod network_sender;
 mod networking;
 pub mod protobuf;
 mod server_builder;
+pub mod tls_util;
 pub mod tonic_service_filter;
 mod tracking;
 pub mod transport_connector;

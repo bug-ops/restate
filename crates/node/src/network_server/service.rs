@@ -16,7 +16,7 @@ use restate_core::network::grpc::CoreNodeSvcHandler;
 use restate_core::network::{ConnectionManager, NetworkServerBuilder};
 use restate_core::{Identification, MetadataWriter};
 use restate_tracing_instrumentation::prometheus_metrics::Prometheus;
-use restate_types::config::CommonOptions;
+use restate_types::config::{CommonOptions, Configuration};
 
 use super::grpc_svc_handler::{MetadataProxySvcHandler, NodeCtlSvcHandler};
 use super::pprof;
@@ -79,7 +79,11 @@ impl NetworkServer {
         );
 
         server_builder
-            .run(node_rpc_health, &options.bind_address.unwrap())
+            .run(
+                node_rpc_health, 
+                &options.bind_address.unwrap(),
+                &Configuration::pinned().networking
+            )
             .await?;
 
         Ok(())

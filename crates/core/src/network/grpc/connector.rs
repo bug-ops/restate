@@ -8,6 +8,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::future::Future;
+
 use futures::Stream;
 use http::Uri;
 use hyper_util::rt::TokioIo;
@@ -19,13 +21,14 @@ use tonic::transport::Endpoint;
 use tonic::transport::channel::Channel;
 use tracing::debug;
 
-use restate_types::config::{Configuration, NetworkingOptions};
+use restate_types::config::{Configuration, NetworkingOptions, TlsSwimlane};
 use restate_types::net::AdvertisedAddress;
 
 use super::MAX_MESSAGE_SIZE;
 use crate::network::grpc::DEFAULT_GRPC_COMPRESSION;
 use crate::network::protobuf::core_node_svc::core_node_svc_client::CoreNodeSvcClient;
 use crate::network::protobuf::network::Message;
+use crate::network::tls_util::{create_client_tls_config, validate_tls_config};
 use crate::network::transport_connector::find_node;
 use crate::network::{ConnectError, Destination, Swimlane, TransportConnect};
 use crate::{Metadata, TaskCenter, TaskKind};
@@ -52,7 +55,7 @@ impl TransportConnect for GrpcConnector {
         };
 
         debug!("Connecting to {} at {}", destination, address);
-        let channel = create_channel(address, swimlane, &Configuration::pinned().networking);
+        let channel = create_channel(address, swimlane, &Configuration::pinned().networking)?;
 
         // Establish the connection
         let mut client = CoreNodeSvcClient::new(channel)
@@ -69,15 +72,45 @@ impl TransportConnect for GrpcConnector {
 
 fn create_channel(
     address: AdvertisedAddress,
-    _swimlane: Swimlane,
+    swimlane: Swimlane,
     options: &NetworkingOptions,
-) -> Channel {
+) -> Result<Channel, ConnectError> {
+    // Map Swimlane to TlsSwimlane for TLS configuration lookup
+    let tls_swimlane = match swimlane {
+        Swimlane::General => TlsSwimlane::General,
+        Swimlane::Gossip => TlsSwimlane::Gossip,
+        Swimlane::BifrostData => TlsSwimlane::BifrostData,
+        Swimlane::IngressData => TlsSwimlane::IngressData,
+    };
+
+    // Get TLS configuration for this swimlane
+    let tls_config = options.tls.for_swimlane(tls_swimlane);
+    
+    // Validate TLS configuration if enabled
+    if tls_config.enabled {
+        validate_tls_config(&tls_config)
+            .map_err(|e| ConnectError::Transport(format!("TLS configuration error: {}", e)))?;
+    }
+
     let endpoint = match &address {
         AdvertisedAddress::Uds(_) => {
             // dummy endpoint required to specify an uds connector, it is not used anywhere
             Endpoint::try_from("http://127.0.0.1").expect("/ should be a valid Uri")
         }
-        AdvertisedAddress::Http(uri) => Channel::builder(uri.clone()).executor(TaskCenterExecutor),
+        AdvertisedAddress::Http(uri) => {
+            let mut endpoint = Channel::builder(uri.clone()).executor(TaskCenterExecutor);
+            
+            // Configure TLS if enabled for HTTP connections
+            if tls_config.enabled {
+                let client_tls_config = create_client_tls_config(&tls_config)
+                    .map_err(|e| ConnectError::Transport(format!("Failed to create TLS config: {}", e)))?;
+                debug!("Configuring TLS for gRPC client to {}", uri);
+                endpoint = endpoint.tls_config(client_tls_config)
+                    .map_err(|e| ConnectError::Transport(format!("Failed to apply TLS config: {}", e)))?;
+            }
+            
+            endpoint
+        }
     };
 
     let endpoint = endpoint
@@ -96,7 +129,7 @@ fn create_channel(
         // this true by default, but this is to guard against any change in defaults
         .tcp_nodelay(true);
 
-    match address {
+    let channel = match address {
         AdvertisedAddress::Uds(uds_path) => {
             endpoint.connect_with_connector_lazy(tower::service_fn(move |_: Uri| {
                 let uds_path = uds_path.clone();
@@ -106,7 +139,9 @@ fn create_channel(
             }))
         }
         AdvertisedAddress::Http(_) => endpoint.connect_lazy()
-    }
+    };
+
+    Ok(channel)
 }
 
 #[derive(Clone, Default)]
