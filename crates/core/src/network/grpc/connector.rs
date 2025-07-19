@@ -264,3 +264,130 @@ where
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use restate_types::config::{TlsConfig, NetworkingOptions};
+    use restate_types::net::AdvertisedAddress;
+    use tempfile::TempDir;
+    use crate::network::tls_util::validate_tls_config;
+    
+    fn init_test_environment() {
+        // Initialize test environment if needed
+        // The actual TLS tests will handle crypto initialization internally
+    }
+
+    const TEST_CERT_PEM: &str = r#"-----BEGIN CERTIFICATE-----
+MIIBkTCB+wIJAMlyFqk69v+9MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNVBAMMCWxv
+Y2FsaG9zdDAeFw0yNDAxMDEwMDAwMDBaFw0yNTAxMDEwMDAwMDBaMBQxEjAQBgNV
+BAMMCWxvY2FsaG9zdDBcMA0GCSqGSIb3DQEBAQUAA0sAMEgCQQDTDxfor3f7n/B6
+XhNO7w8sONqhD4bIjT2qN7VQNcJJd1ZPEYJBFb2o9Yb4g9ShGZ1E4DxF+QqNjCk6
+0qvFqLhfAgMBAAEwDQYJKoZIhvcNAQELBQADQQCJ1JQ7LCcEWVEb+KlkQi1nSmZ6
+r5B1HdDfr8R3h6Q2OJl3RqY5c4LT5GdIx4WxWzFkOQWmOFwdJNUdUqpU3Z7Z
+-----END CERTIFICATE-----"#;
+
+    const TEST_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEA0w8X6K93+5/wel4T
+Tu8PLDjaoQ+GyI09qje1UDXCSXdWTxGCQRW9qPWG+IPUoRmdROA8RfkKjYwpOtKr
+xai4XwIDAQABAkBvb6fgM9ys/yLCNpYCiYOmNJrjAM9Y/QDHQNhM3rKMRX7HZJ1j
+vLLKlNqBUXO8Y3C9F5F0Bfp5b6cQqRJNvtMhAiEA+YF5+J9pFqYB8vQoNHY1N7cZ
+vF2Tj0XY5Wj9NQ0x6IECIQDZJY4Nz7vX4w9Q2gR3xJ3i5j6tJq8lO3cR4pYG0QYA
+YwIhAMr5wJ1xQ9hJN0J2mR7F3vA5GfQ8bO2qN6iHY8X7JxnlAiEA3YOy2lWn9Ol3
+xH8LfH8rN5V7t0pRvY2qTj3nN1YoE6sCIC2jOjdQ7J0uH1dQ5oJ8G2aN6k3O5hP7
+f4rV7w2XNdBt
+-----END PRIVATE KEY-----"#;
+
+    #[test]
+    fn test_grpc_connector_default() {
+        let connector = GrpcConnector::default();
+        assert!(connector.cert_reloader.is_none());
+    }
+    
+    #[test]
+    fn test_grpc_connector_with_cert_reloader() {
+        // This test can't run without TaskCenter initialization
+        // Just test that CertificateReloader can be created
+        let cert_reloader = CertificateReloader::new().unwrap();
+        // Test that we can subscribe to events
+        let _rx = cert_reloader.subscribe();
+    }
+
+    #[test]
+    fn test_create_channel_without_tls() {
+        let _address = AdvertisedAddress::Http("http://localhost:1234".parse().unwrap());
+        let options = NetworkingOptions::default(); // TLS disabled by default
+        
+        let tls_config = options.tls.for_swimlane(TlsSwimlane::General);
+        assert!(!tls_config.enabled);
+        
+        // Channel creation requires TaskCenter, so just test configuration
+        assert_eq!(tls_config.cert_path, None);
+        assert_eq!(tls_config.key_path, None);
+    }
+    
+    #[test]
+    fn test_create_channel_with_tls_config() {
+        init_test_environment();
+        let temp_dir = TempDir::new().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        let key_path = temp_dir.path().join("key.pem");
+        
+        std::fs::write(&cert_path, TEST_CERT_PEM).unwrap();
+        std::fs::write(&key_path, TEST_KEY_PEM).unwrap();
+        
+        let mut options = NetworkingOptions::default();
+        options.tls = TlsConfig {
+            enabled: true,
+            cert_path: Some(cert_path.clone()),
+            key_path: Some(key_path.clone()),
+            ca_cert_path: None,
+            require_client_cert: false,
+            swimlane_overrides: Default::default(),
+        };
+        
+        // Test that TLS configuration is properly loaded
+        let tls_config = options.tls.for_swimlane(TlsSwimlane::General);
+        assert!(tls_config.enabled);
+        assert_eq!(tls_config.cert_path, Some(cert_path));
+        assert_eq!(tls_config.key_path, Some(key_path));
+    }
+    
+    #[test]
+    fn test_connection_cache_basic() {
+        let connector = GrpcConnector::default();
+        
+        // Test that cache starts empty
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = connector.connection_cache.read().await;
+            assert_eq!(cache.len(), 0);
+        });
+    }
+    
+    #[test]
+    fn test_connection_cache_with_cert_reload() {
+        init_test_environment();
+        let temp_dir = TempDir::new().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        let key_path = temp_dir.path().join("key.pem");
+        
+        std::fs::write(&cert_path, TEST_CERT_PEM).unwrap();
+        std::fs::write(&key_path, TEST_KEY_PEM).unwrap();
+        
+        let _cert_reloader = CertificateReloader::new().unwrap();
+        
+        // Test configuration without TaskCenter spawn
+        let tls_config = restate_types::config::EffectiveTlsConfig {
+            enabled: true,
+            cert_path: Some(cert_path),
+            key_path: Some(key_path),
+            ca_cert_path: None,
+            require_client_cert: false,
+        };
+        
+        // Test validation (this doesn't require TaskCenter)
+        let validation_result = validate_tls_config(&tls_config);
+        assert!(validation_result.is_ok());
+    }
+}

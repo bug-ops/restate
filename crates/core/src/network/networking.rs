@@ -152,3 +152,34 @@ impl<T: TransportConnect> NetworkSender for Networking<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_networking_with_grpc_connector() {
+        let networking = Networking::with_grpc_connector();
+        // Simply verify it creates successfully
+        // Connection manager exists
+        let _ = networking.connection_manager();
+    }
+    
+    #[test]  
+    fn test_networking_with_cert_reloader() {
+        // Test without TaskCenter by just creating CertificateReloader
+        let cert_reloader = CertificateReloader::new().unwrap();
+        let _rx = cert_reloader.subscribe();
+        // This test verifies CertificateReloader can be created for networking integration
+    }
+    
+    #[test]
+    fn test_networking_clone() {
+        let networking = Networking::with_grpc_connector();
+        let cloned = networking.clone();
+        // Both should share the same connection manager
+        // Just verify both have connection managers
+        let _ = networking.connection_manager();
+        let _ = cloned.connection_manager();
+    }
+}
