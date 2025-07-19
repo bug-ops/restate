@@ -10,8 +10,10 @@
 
 use std::time::Duration;
 
+use restate_types::config::{Configuration, TlsSwimlane};
 use restate_types::net::RpcRequest;
 use restate_types::{GenerationalNodeId, NodeId};
+use tracing::{info, warn};
 
 use tokio::time::Instant;
 
@@ -21,6 +23,7 @@ use super::{
     MessageSendError, NetworkSender, RpcError, Swimlane,
 };
 use super::{CertificateReloader, GrpcConnector, TransportConnect};
+use crate::{TaskCenter, TaskKind};
 
 /// Access to node-to-node networking infrastructure.
 pub struct Networking<T> {
@@ -39,9 +42,49 @@ impl<T: Clone> Clone for Networking<T> {
 
 impl Networking<GrpcConnector> {
     pub fn with_grpc_connector() -> Self {
+        let connector = GrpcConnector::default();
+        
+        // Configure TLS for all swimlanes if enabled  
+        let cert_reloader = connector.cert_reloader().clone();
+        Self::configure_tls_for_all_swimlanes(cert_reloader);
+        
         Self {
             connections: ConnectionManager::default(),
-            connector: GrpcConnector::default(),
+            connector,
+        }
+    }
+    
+    /// Configure TLS certificate watching for all enabled swimlanes
+    fn configure_tls_for_all_swimlanes(cert_reloader: std::sync::Arc<CertificateReloader>) {
+        let config = Configuration::pinned();
+        
+        // Configure TLS for each swimlane
+        let swimlanes = [
+            TlsSwimlane::General,
+            TlsSwimlane::Gossip,
+            TlsSwimlane::BifrostData,
+            TlsSwimlane::IngressData,
+        ];
+        
+        // Only configure TLS watching if TaskCenter is available
+        if TaskCenter::try_current().is_some() {
+            let _ = TaskCenter::spawn(
+                TaskKind::NetworkMessageHandler,
+                "tls-config-loader",
+                async move {
+                    for swimlane in swimlanes {
+                        let tls_config = config.networking.tls.for_swimlane(swimlane);
+                        if tls_config.enabled {
+                            if let Err(e) = cert_reloader.add_config(swimlane, tls_config).await {
+                                warn!("Failed to configure TLS for swimlane {:?}: {}", swimlane, e);
+                            } else {
+                                info!("Configured TLS certificate watching for swimlane {:?}", swimlane);
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            );
         }
     }
     

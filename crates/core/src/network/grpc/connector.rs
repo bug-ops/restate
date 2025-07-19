@@ -36,20 +36,28 @@ use crate::network::transport_connector::find_node;
 use crate::network::{CertificateReloader, ConnectError, Destination, Swimlane, TransportConnect};
 use crate::{Metadata, TaskCenter, TaskKind};
 
+/// Maximum number of cached gRPC connections  
+const MAX_CACHED_CONNECTIONS: usize = 1000;
+
 #[derive(Clone)]
 pub struct GrpcConnector {
     /// Connection cache for hot certificate reload
     connection_cache: Arc<RwLock<HashMap<(AdvertisedAddress, TlsSwimlane), Channel>>>,
     /// Certificate reloader for hot reload events
-    cert_reloader: Option<Arc<CertificateReloader>>,
+    cert_reloader: Arc<CertificateReloader>,
 }
 
 impl Default for GrpcConnector {
     fn default() -> Self {
-        Self {
-            connection_cache: Arc::new(RwLock::new(HashMap::new())),
-            cert_reloader: None,
-        }
+        let cert_reloader = Arc::new(
+            CertificateReloader::new().unwrap_or_else(|e| {
+                warn!("Failed to create certificate reloader: {}. TLS hot reload will be disabled.", e);
+                // Create a minimal reloader that doesn't watch files
+                CertificateReloader::new_minimal()
+            })
+        );
+        
+        Self::new_with_cert_reloader(cert_reloader)
     }
 }
 
@@ -58,43 +66,50 @@ impl GrpcConnector {
     pub fn new_with_cert_reloader(cert_reloader: Arc<CertificateReloader>) -> Self {
         let connector = Self {
             connection_cache: Arc::new(RwLock::new(HashMap::new())),
-            cert_reloader: Some(cert_reloader.clone()),
+            cert_reloader: cert_reloader.clone(),
         };
         
-        // Start background task to handle certificate reload events
-        let cache_clone = connector.connection_cache.clone();
-        let mut reload_rx = cert_reloader.subscribe();
-        
-        let _ = TaskCenter::spawn(
-            TaskKind::NetworkMessageHandler,
-            "grpc-cert-reloader",
-            async move {
-                while let Ok(event) = reload_rx.recv().await {
-                    info!("Received certificate reload event for swimlane {:?}", event.swimlane);
-                    
-                    // Clear all cached connections for the affected swimlane
-                    // New connections will be created with updated certificates
-                    let mut cache = cache_clone.write().await;
-                    let keys_to_remove: Vec<_> = cache
-                        .keys()
-                        .filter(|(_, swimlane)| *swimlane == event.swimlane)
-                        .cloned()
-                        .collect();
-                    
-                    let count = keys_to_remove.len();
-                    for key in keys_to_remove {
-                        cache.remove(&key);
-                        debug!("Removed cached connection for {:?} due to certificate reload", key.0);
+        // Start background task to handle certificate reload events (only if TaskCenter is available)
+        if TaskCenter::try_current().is_some() {
+            let cache_clone = connector.connection_cache.clone();
+            let mut reload_rx = cert_reloader.subscribe();
+            
+            let _ = TaskCenter::spawn(
+                TaskKind::NetworkMessageHandler,
+                "grpc-cert-reloader",
+                async move {
+                    while let Ok(event) = reload_rx.recv().await {
+                        info!("Received certificate reload event for swimlane {:?}", event.swimlane);
+                        
+                        // Clear all cached connections for the affected swimlane
+                        // New connections will be created with updated certificates
+                        let mut cache = cache_clone.write().await;
+                        let keys_to_remove: Vec<_> = cache
+                            .keys()
+                            .filter(|(_, swimlane)| *swimlane == event.swimlane)
+                            .cloned()
+                            .collect();
+                        
+                        let count = keys_to_remove.len();
+                        for key in keys_to_remove {
+                            cache.remove(&key);
+                            debug!("Removed cached connection for {:?} due to certificate reload", key.0);
+                        }
+                        
+                        info!("Updated {} connections for swimlane {:?}", count, event.swimlane);
                     }
-                    
-                    info!("Updated {} connections for swimlane {:?}", count, event.swimlane);
-                }
-                warn!("Certificate reload event listener terminated");
-                Ok(())
-            },
-        );
+                    warn!("Certificate reload event listener terminated");
+                    Ok(())
+                },
+            );
+        }
         
         connector
+    }
+    
+    /// Get reference to the certificate reloader
+    pub fn cert_reloader(&self) -> &Arc<CertificateReloader> {
+        &self.cert_reloader
     }
     
     /// Get or create a cached channel
@@ -127,9 +142,21 @@ impl GrpcConnector {
         debug!("Creating new gRPC connection to {}", address);
         let channel = create_channel(address.clone(), swimlane, options)?;
         
-        // Cache the connection
+        // Cache the connection with size limit
         {
             let mut cache = self.connection_cache.write().await;
+            
+            // If cache is full, remove oldest entries (simple FIFO)
+            if cache.len() >= MAX_CACHED_CONNECTIONS {
+                let keys_to_remove: Vec<_> = cache.keys().take(cache.len() - MAX_CACHED_CONNECTIONS + 1).cloned().collect();
+                for key in keys_to_remove {
+                    cache.remove(&key);
+                    debug!("Removed cached connection for {:?} due to cache size limit", key.0);
+                }
+                warn!("Connection cache size limit reached ({}), removed {} old connections", 
+                      MAX_CACHED_CONNECTIONS, cache.len() - MAX_CACHED_CONNECTIONS + 1);
+            }
+            
             cache.insert(cache_key, channel.clone());
         }
         
@@ -194,7 +221,9 @@ fn create_channel(
     let endpoint = match &address {
         AdvertisedAddress::Uds(_) => {
             // dummy endpoint required to specify an uds connector, it is not used anywhere
-            Endpoint::try_from("http://127.0.0.1").expect("/ should be a valid Uri")
+            Endpoint::try_from("http://127.0.0.1").map_err(|e| {
+                ConnectError::Transport(format!("Failed to create dummy endpoint for UDS: {}", e))
+            })?
         }
         AdvertisedAddress::Http(uri) => {
             let mut endpoint = Channel::builder(uri.clone()).executor(TaskCenterExecutor);
@@ -301,7 +330,10 @@ f4rV7w2XNdBt
     #[test]
     fn test_grpc_connector_default() {
         let connector = GrpcConnector::default();
-        assert!(connector.cert_reloader.is_none());
+        // Certificate reloader should always be present now
+        let mut rx = connector.cert_reloader().subscribe();
+        // Should be able to try receiving (even if no events)
+        assert!(rx.try_recv().is_err());
     }
     
     #[test]
