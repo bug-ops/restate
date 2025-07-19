@@ -8,18 +8,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 
 use futures::Stream;
 use http::Uri;
 use hyper_util::rt::TokioIo;
 use tokio::io;
 use tokio::net::UnixStream;
+use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Endpoint;
 use tonic::transport::channel::Channel;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use restate_types::config::{Configuration, NetworkingOptions, TlsSwimlane};
 use restate_types::net::AdvertisedAddress;
@@ -30,12 +33,108 @@ use crate::network::protobuf::core_node_svc::core_node_svc_client::CoreNodeSvcCl
 use crate::network::protobuf::network::Message;
 use crate::network::tls_util::{create_client_tls_config, validate_tls_config};
 use crate::network::transport_connector::find_node;
-use crate::network::{ConnectError, Destination, Swimlane, TransportConnect};
+use crate::network::{CertificateReloader, ConnectError, Destination, Swimlane, TransportConnect};
 use crate::{Metadata, TaskCenter, TaskKind};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct GrpcConnector {
-    _private: (),
+    /// Connection cache for hot certificate reload
+    connection_cache: Arc<RwLock<HashMap<(AdvertisedAddress, TlsSwimlane), Channel>>>,
+    /// Certificate reloader for hot reload events
+    cert_reloader: Option<Arc<CertificateReloader>>,
+}
+
+impl Default for GrpcConnector {
+    fn default() -> Self {
+        Self {
+            connection_cache: Arc::new(RwLock::new(HashMap::new())),
+            cert_reloader: None,
+        }
+    }
+}
+
+impl GrpcConnector {
+    /// Create a new GrpcConnector with certificate reloader support
+    pub fn new_with_cert_reloader(cert_reloader: Arc<CertificateReloader>) -> Self {
+        let connector = Self {
+            connection_cache: Arc::new(RwLock::new(HashMap::new())),
+            cert_reloader: Some(cert_reloader.clone()),
+        };
+        
+        // Start background task to handle certificate reload events
+        let cache_clone = connector.connection_cache.clone();
+        let mut reload_rx = cert_reloader.subscribe();
+        
+        let _ = TaskCenter::spawn(
+            TaskKind::NetworkMessageHandler,
+            "grpc-cert-reloader",
+            async move {
+                while let Ok(event) = reload_rx.recv().await {
+                    info!("Received certificate reload event for swimlane {:?}", event.swimlane);
+                    
+                    // Clear all cached connections for the affected swimlane
+                    // New connections will be created with updated certificates
+                    let mut cache = cache_clone.write().await;
+                    let keys_to_remove: Vec<_> = cache
+                        .keys()
+                        .filter(|(_, swimlane)| *swimlane == event.swimlane)
+                        .cloned()
+                        .collect();
+                    
+                    let count = keys_to_remove.len();
+                    for key in keys_to_remove {
+                        cache.remove(&key);
+                        debug!("Removed cached connection for {:?} due to certificate reload", key.0);
+                    }
+                    
+                    info!("Updated {} connections for swimlane {:?}", count, event.swimlane);
+                }
+                warn!("Certificate reload event listener terminated");
+                Ok(())
+            },
+        );
+        
+        connector
+    }
+    
+    /// Get or create a cached channel
+    async fn get_or_create_channel(
+        &self,
+        address: AdvertisedAddress,
+        swimlane: Swimlane,
+        options: &NetworkingOptions,
+    ) -> Result<Channel, ConnectError> {
+        // Map Swimlane to TlsSwimlane for cache key
+        let tls_swimlane = match swimlane {
+            Swimlane::General => TlsSwimlane::General,
+            Swimlane::Gossip => TlsSwimlane::Gossip,
+            Swimlane::BifrostData => TlsSwimlane::BifrostData,
+            Swimlane::IngressData => TlsSwimlane::IngressData,
+        };
+        
+        let cache_key = (address.clone(), tls_swimlane);
+        
+        // Check if we have a cached connection
+        {
+            let cache = self.connection_cache.read().await;
+            if let Some(channel) = cache.get(&cache_key) {
+                debug!("Using cached gRPC connection to {}", address);
+                return Ok(channel.clone());
+            }
+        }
+        
+        // Create new connection
+        debug!("Creating new gRPC connection to {}", address);
+        let channel = create_channel(address.clone(), swimlane, options)?;
+        
+        // Cache the connection
+        {
+            let mut cache = self.connection_cache.write().await;
+            cache.insert(cache_key, channel.clone());
+        }
+        
+        Ok(channel)
+    }
 }
 
 impl TransportConnect for GrpcConnector {
@@ -55,7 +154,7 @@ impl TransportConnect for GrpcConnector {
         };
 
         debug!("Connecting to {} at {}", destination, address);
-        let channel = create_channel(address, swimlane, &Configuration::pinned().networking)?;
+        let channel = self.get_or_create_channel(address, swimlane, &Configuration::pinned().networking).await?;
 
         // Establish the connection
         let mut client = CoreNodeSvcClient::new(channel)

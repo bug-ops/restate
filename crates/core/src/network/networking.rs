@@ -20,7 +20,7 @@ use super::{
     ConnectError, Connection, ConnectionClosed, ConnectionManager, LazyConnection,
     MessageSendError, NetworkSender, RpcError, Swimlane,
 };
-use super::{GrpcConnector, TransportConnect};
+use super::{CertificateReloader, GrpcConnector, TransportConnect};
 
 /// Access to node-to-node networking infrastructure.
 pub struct Networking<T> {
@@ -42,6 +42,14 @@ impl Networking<GrpcConnector> {
         Self {
             connections: ConnectionManager::default(),
             connector: GrpcConnector::default(),
+        }
+    }
+    
+    /// Create networking with gRPC connector and certificate reloader support
+    pub fn with_grpc_connector_and_cert_reloader(cert_reloader: std::sync::Arc<CertificateReloader>) -> Self {
+        Self {
+            connections: ConnectionManager::default(),
+            connector: GrpcConnector::new_with_cert_reloader(cert_reloader),
         }
     }
 }
