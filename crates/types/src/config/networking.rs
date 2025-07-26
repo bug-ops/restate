@@ -74,6 +74,13 @@ pub struct NetworkingOptions {
     /// If network latency is high, it's recommended to set this to a higher value.
     /// Maximum theoretical value is 2^31-1 (2 GiB - 1), but we will sanitize this value to 500 MiB.
     data_stream_window_size: NonZeroByteCount,
+
+    /// # Enable separate internal server
+    ///
+    /// When enabled, internal node-to-node communication services will be hosted
+    /// on a separate server. This allows for different security policies between
+    /// administrative and internal communication channels.
+    pub enable_separate_internal_server: bool,
 }
 
 impl NetworkingOptions {
@@ -107,6 +114,7 @@ impl Default for NetworkingOptions {
             data_stream_window_size: NonZeroByteCount::new(
                 NonZeroUsize::new(2 * 1024 * 1024).expect("Non zero number"),
             ),
+            enable_separate_internal_server: false,
         }
     }
 }

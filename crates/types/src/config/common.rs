@@ -120,6 +120,12 @@ pub struct CommonOptions {
     #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     pub bind_address: Option<BindAddress>,
 
+    /// Address to bind for the internal Node server (when separate internal server is enabled).
+    /// Defaults to the same port + 1 (e.g., if main server is 5122, internal will be 5123).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
+    pub internal_bind_address: Option<BindAddress>,
+
     /// Address that other nodes will use to connect to this node. Default is `http://127.0.0.1:5122/`
     #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     pub advertised_address: AdvertisedAddress,
@@ -441,6 +447,7 @@ impl Default for CommonOptions {
             base_dir: None,
             metadata_client: MetadataClientOptions::default(),
             bind_address: None,
+            internal_bind_address: None,
             advertised_address: AdvertisedAddress::from_str(DEFAULT_ADVERTISED_ADDRESS).unwrap(),
             default_num_partitions: 24,
             default_replication: ReplicationProperty::new_unchecked(1),
