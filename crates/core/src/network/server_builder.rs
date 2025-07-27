@@ -81,32 +81,34 @@ impl NetworkServerBuilder {
         admin_bind_address: &BindAddress,
         internal_bind_address: &BindAddress,
     ) -> Result<(), anyhow::Error> {
-        let admin_task = tokio::spawn({
-            let admin_health = admin_health.clone();
-            let admin_bind_address = admin_bind_address.clone();
-            async move {
-                admin_builder.run_single_server(admin_health, &admin_bind_address).await
-            }
-        });
+        let admin_task =
+            crate::TaskCenter::spawn_unmanaged(crate::TaskKind::RpcServer, "admin-server", {
+                let admin_health = admin_health.clone();
+                let admin_bind_address = admin_bind_address.clone();
+                async move {
+                    admin_builder
+                        .run_single_server(admin_health, &admin_bind_address)
+                        .await
+                }
+            })?;
 
-        let internal_task = tokio::spawn({
-            let internal_health = internal_health.clone();
-            let internal_bind_address = internal_bind_address.clone();
-            async move {
-                internal_builder.run_single_server(internal_health, &internal_bind_address).await
-            }
-        });
+        let internal_task =
+            crate::TaskCenter::spawn_unmanaged(crate::TaskKind::RpcServer, "internal-server", {
+                let internal_health = internal_health.clone();
+                let internal_bind_address = internal_bind_address.clone();
+                async move {
+                    internal_builder
+                        .run_single_server(internal_health, &internal_bind_address)
+                        .await
+                }
+            })?;
 
         // Wait for both servers to complete
         let (admin_result, internal_result) = tokio::join!(admin_task, internal_task);
-        
+
         // Check results and return first error encountered
-        if let Err(e) = admin_result? {
-            return Err(e);
-        }
-        if let Err(e) = internal_result? {
-            return Err(e);
-        }
+        admin_result??;
+        internal_result??;
 
         Ok(())
     }

@@ -24,6 +24,16 @@ use restate_metadata_store::protobuf::metadata_proxy_svc::{
     DeleteRequest, GetRequest, GetResponse, GetVersionResponse, PutRequest,
 };
 
+// Import MetadataServerSvc types for proxy handler
+use restate_metadata_server_grpc::grpc::metadata_server_svc_server::{
+    MetadataServerSvc, MetadataServerSvcServer,
+};
+use restate_metadata_server_grpc::grpc::{
+    DeleteRequest as ServerDeleteRequest, GetRequest as ServerGetRequest,
+    GetResponse as ServerGetResponse, GetVersionResponse as ServerGetVersionResponse,
+    PutRequest as ServerPutRequest,
+};
+
 use restate_core::network::net_util::create_tonic_channel;
 use restate_core::protobuf::node_ctl_svc::node_ctl_svc_server::{NodeCtlSvc, NodeCtlSvcServer};
 use restate_core::protobuf::node_ctl_svc::{
@@ -362,5 +372,186 @@ impl MetadataProxySvc for MetadataProxySvcHandler {
             })?;
 
         Ok(Response::new(()))
+    }
+}
+
+/// Proxy handler that implements MetadataServerSvc protocol and forwards requests to MetadataProxySvc
+pub struct MetadataServerSvcProxyHandler {
+    metadata_store_client: MetadataStoreClient,
+    is_metadata_server: bool,
+}
+
+impl MetadataServerSvcProxyHandler {
+    pub fn new(metadata_store_client: MetadataStoreClient) -> Self {
+        let is_metadata_server =
+            Configuration::pinned().has_role(restate_types::nodes_config::Role::MetadataServer);
+        Self {
+            metadata_store_client,
+            is_metadata_server,
+        }
+    }
+
+    pub fn into_server(self) -> MetadataServerSvcServer<Self> {
+        MetadataServerSvcServer::new(self)
+            .accept_compressed(CompressionEncoding::Zstd)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Zstd)
+            .send_compressed(CompressionEncoding::Gzip)
+    }
+}
+
+#[async_trait::async_trait]
+impl MetadataServerSvc for MetadataServerSvcProxyHandler {
+    /// Forward get request to MetadataProxySvc
+    async fn get(
+        &self,
+        request: Request<ServerGetRequest>,
+    ) -> Result<Response<ServerGetResponse>, Status> {
+        let request = request.into_inner();
+
+        let value = self
+            .metadata_store_client
+            .inner()
+            .get(request.key.into())
+            .await
+            .map_err(|err| Status::internal(err.to_string()))?;
+
+        let response = ServerGetResponse {
+            value: value.map(Into::into),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    /// Forward get_version request to MetadataProxySvc
+    async fn get_version(
+        &self,
+        request: Request<ServerGetRequest>,
+    ) -> Result<Response<ServerGetVersionResponse>, Status> {
+        let request = request.into_inner();
+
+        let version = self
+            .metadata_store_client
+            .inner()
+            .get_version(request.key.into())
+            .await
+            .map_err(|err| Status::internal(err.to_string()))?;
+
+        let response = ServerGetVersionResponse {
+            version: version.map(Into::into),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    /// Forward put request to MetadataProxySvc
+    async fn put(&self, request: Request<ServerPutRequest>) -> Result<Response<()>, Status> {
+        let request = request.into_inner();
+
+        let value = request
+            .value
+            .ok_or_else(|| Status::invalid_argument("value is required"))?
+            .try_into()
+            .map_err(|err: ConversionError| Status::invalid_argument(err.to_string()))?;
+
+        let precondition = request
+            .precondition
+            .ok_or_else(|| Status::invalid_argument("precondition is required"))?
+            .try_into()
+            .map_err(|err: ConversionError| Status::invalid_argument(err.to_string()))?;
+
+        self.metadata_store_client
+            .inner()
+            .put(request.key.into(), value, precondition)
+            .await
+            .map_err(|err| match err {
+                WriteError::FailedPrecondition(msg) => Status::failed_precondition(msg),
+                err => Status::internal(err.to_string()),
+            })?;
+
+        Ok(Response::new(()))
+    }
+
+    /// Forward delete request to MetadataProxySvc
+    async fn delete(&self, request: Request<ServerDeleteRequest>) -> Result<Response<()>, Status> {
+        let request = request.into_inner();
+
+        let precondition = request
+            .precondition
+            .ok_or_else(|| Status::invalid_argument("precondition is required"))?
+            .try_into()
+            .map_err(|err: ConversionError| Status::invalid_argument(err.to_string()))?;
+
+        self.metadata_store_client
+            .inner()
+            .delete(request.key.into(), precondition)
+            .await
+            .map_err(|err| match err {
+                WriteError::FailedPrecondition(msg) => Status::failed_precondition(msg),
+                err => Status::internal(err.to_string()),
+            })?;
+
+        Ok(Response::new(()))
+    }
+
+    /// Not implemented - these methods are only available on actual metadata servers
+    async fn provision(
+        &self,
+        request: Request<restate_metadata_server_grpc::grpc::ProvisionRequest>,
+    ) -> Result<Response<restate_metadata_server_grpc::grpc::ProvisionResponse>, Status> {
+        if !self.is_metadata_server {
+            return Err(Status::unimplemented(
+                "provision is not supported in proxy mode",
+            ));
+        }
+
+        let request = request.into_inner();
+
+        // Convert the request to NodesConfiguration
+        let nodes_config_bytes = request.nodes_configuration;
+
+        let nodes_config: restate_types::nodes_config::NodesConfiguration =
+            restate_types::storage::StorageCodec::decode(&mut nodes_config_bytes.as_ref())
+                .map_err(|err| {
+                    Status::invalid_argument(format!(
+                        "failed to decode nodes_configuration: {err}"
+                    ))
+                })?;
+
+        // Call provision on the metadata store client
+        let newly_provisioned = self
+            .metadata_store_client
+            .inner()
+            .provision(&nodes_config)
+            .await
+            .map_err(|err| Status::internal(err.to_string()))?;
+
+        let response = restate_metadata_server_grpc::grpc::ProvisionResponse { newly_provisioned };
+
+        Ok(Response::new(response))
+    }
+
+    async fn status(
+        &self,
+        _request: Request<()>,
+    ) -> Result<Response<restate_metadata_server_grpc::grpc::StatusResponse>, Status> {
+        Err(Status::unimplemented(
+            "status is not supported in proxy mode",
+        ))
+    }
+
+    async fn remove_node(
+        &self,
+        _request: Request<restate_metadata_server_grpc::grpc::RemoveNodeRequest>,
+    ) -> Result<Response<()>, Status> {
+        Err(Status::unimplemented(
+            "remove_node is not supported in proxy mode",
+        ))
+    }
+
+    async fn add_node(&self, _request: Request<()>) -> Result<Response<()>, Status> {
+        Err(Status::unimplemented(
+            "add_node is not supported in proxy mode",
+        ))
     }
 }

@@ -18,7 +18,9 @@ use restate_core::{Identification, MetadataWriter};
 use restate_tracing_instrumentation::prometheus_metrics::Prometheus;
 use restate_types::config::{CommonOptions, Configuration};
 
-use super::grpc_svc_handler::{MetadataProxySvcHandler, NodeCtlSvcHandler};
+use super::grpc_svc_handler::{
+    MetadataProxySvcHandler, MetadataServerSvcProxyHandler, NodeCtlSvcHandler,
+};
 use super::pprof;
 use crate::network_server::metrics::render_metrics;
 use crate::network_server::state::NodeCtrlHandlerStateBuilder;
@@ -34,7 +36,7 @@ impl NetworkServer {
         prometheus: Prometheus,
     ) -> Result<(), anyhow::Error> {
         let networking_config = &Configuration::pinned().networking;
-        
+
         if networking_config.enable_separate_internal_server {
             Self::run_separate_servers(
                 connection_manager,
@@ -42,7 +44,8 @@ impl NetworkServer {
                 options,
                 metadata_writer,
                 prometheus,
-            ).await
+            )
+            .await
         } else {
             Self::run_single_server(
                 connection_manager,
@@ -50,7 +53,8 @@ impl NetworkServer {
                 options,
                 metadata_writer,
                 prometheus,
-            ).await
+            )
+            .await
         }
     }
 
@@ -96,6 +100,13 @@ impl NetworkServer {
             restate_metadata_store::protobuf::metadata_proxy_svc::FILE_DESCRIPTOR_SET,
         );
 
+        // Register MetadataServerSvc proxy for replicated metadata client compatibility
+        server_builder.register_grpc_service(
+            MetadataServerSvcProxyHandler::new(metadata_writer.raw_metadata_store_client().clone())
+                .into_server(),
+            restate_metadata_server_grpc::grpc::FILE_DESCRIPTOR_SET,
+        );
+
         server_builder.register_grpc_service(
             NodeCtlSvcHandler::new(metadata_writer).into_server(),
             restate_core::protobuf::node_ctl_svc::FILE_DESCRIPTOR_SET,
@@ -122,7 +133,7 @@ impl NetworkServer {
     ) -> Result<(), anyhow::Error> {
         // Create admin server builder (external services)
         let mut admin_builder = NetworkServerBuilder::default();
-        
+
         // Create internal server builder (internal services)
         let mut internal_builder = NetworkServerBuilder::default();
 
@@ -141,7 +152,7 @@ impl NetworkServer {
             .route("/debug/pprof/heap", get(pprof::heap))
             .route(
                 "/debug/pprof/heap/activate",
-                on(post_or_put.clone(), pprof::activate_heap),
+                on(post_or_put, pprof::activate_heap),
             )
             .route(
                 "/debug/pprof/heap/deactivate",
@@ -151,27 +162,52 @@ impl NetworkServer {
 
         admin_builder.register_axum_routes(axum_router);
 
-        // Admin server gets NodeCtlSvc (for restatectl)
+        // Get bind addresses first
+        let admin_bind_address = options.bind_address.as_ref().unwrap();
+        let internal_bind_address = Self::get_internal_bind_address(&options)?;
+
+        // Admin server gets external-facing services
         admin_builder.register_grpc_service(
             NodeCtlSvcHandler::new(metadata_writer.clone()).into_server(),
             restate_core::protobuf::node_ctl_svc::FILE_DESCRIPTOR_SET,
         );
 
-        // Internal server gets internal communication services
+        // For dual server setup, we need MetadataProxySvc accessible on both servers
+        admin_builder.register_grpc_service(
+            MetadataProxySvcHandler::new(metadata_writer.raw_metadata_store_client().clone())
+                .into_server(),
+            restate_metadata_store::protobuf::metadata_proxy_svc::FILE_DESCRIPTOR_SET,
+        );
+
+        // Register MetadataServerSvc proxy/handler for replicated metadata client compatibility
+        // The proxy will automatically detect if this node is a metadata server and enable
+        // additional functionality like provision accordingly
+        admin_builder.register_grpc_service(
+            MetadataServerSvcProxyHandler::new(metadata_writer.raw_metadata_store_client().clone())
+                .into_server(),
+            restate_metadata_server_grpc::grpc::FILE_DESCRIPTOR_SET,
+        );
+
         internal_builder.register_grpc_service(
             MetadataProxySvcHandler::new(metadata_writer.raw_metadata_store_client().clone())
                 .into_server(),
             restate_metadata_store::protobuf::metadata_proxy_svc::FILE_DESCRIPTOR_SET,
         );
 
+        // Register MetadataServerSvc proxy for replicated metadata client compatibility
+        internal_builder.register_grpc_service(
+            MetadataServerSvcProxyHandler::new(metadata_writer.raw_metadata_store_client().clone())
+                .into_server(),
+            restate_metadata_server_grpc::grpc::FILE_DESCRIPTOR_SET,
+        );
+
+        // Internal server gets node-to-node communication services
         internal_builder.register_grpc_service(
             CoreNodeSvcHandler::new(connection_manager).into_server(),
             restate_core::network::protobuf::core_node_svc::FILE_DESCRIPTOR_SET,
         );
 
         let node_rpc_health = TaskCenter::with_current(|tc| tc.health().node_rpc_status());
-        let admin_bind_address = options.bind_address.as_ref().unwrap();
-        let internal_bind_address = Self::get_internal_bind_address(&options)?;
 
         NetworkServerBuilder::run_separate_servers(
             admin_builder,
@@ -180,10 +216,13 @@ impl NetworkServer {
             node_rpc_health,
             admin_bind_address,
             &internal_bind_address,
-        ).await
+        )
+        .await
     }
 
-    fn get_internal_bind_address(options: &CommonOptions) -> Result<restate_types::net::BindAddress, anyhow::Error> {
+    fn get_internal_bind_address(
+        options: &CommonOptions,
+    ) -> Result<restate_types::net::BindAddress, anyhow::Error> {
         if let Some(internal_addr) = &options.internal_bind_address {
             return Ok(internal_addr.clone());
         }
@@ -193,15 +232,18 @@ impl NetworkServer {
         let internal_port = match main_bind {
             restate_types::net::BindAddress::Socket(addr) => addr.port() + 1,
             restate_types::net::BindAddress::Uds(_) => {
-                return Err(anyhow::anyhow!("Internal bind address must be specified when using UDS"));
+                return Err(anyhow::anyhow!(
+                    "Internal bind address must be specified when using UDS"
+                ));
             }
         };
 
         let internal_addr = match main_bind {
             restate_types::net::BindAddress::Socket(addr) => {
-                restate_types::net::BindAddress::Socket(
-                    std::net::SocketAddr::new(addr.ip(), internal_port)
-                )
+                restate_types::net::BindAddress::Socket(std::net::SocketAddr::new(
+                    addr.ip(),
+                    internal_port,
+                ))
             }
             restate_types::net::BindAddress::Uds(_) => unreachable!(),
         };
