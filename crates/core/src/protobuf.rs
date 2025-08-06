@@ -29,6 +29,7 @@ pub mod cluster_ctrl_svc {
 pub mod node_ctl_svc {
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
+    use restate_types::protobuf::cluster::ClusterConfiguration;
 
     use crate::network::grpc::DEFAULT_GRPC_COMPRESSION;
 
@@ -38,6 +39,22 @@ pub mod node_ctl_svc {
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("node_ctl_svc_descriptor");
+
+    impl ProvisionClusterResponse {
+        pub fn dry_run(cluster_configuration: ClusterConfiguration) -> Self {
+            ProvisionClusterResponse {
+                dry_run: true,
+                cluster_configuration: Some(cluster_configuration),
+            }
+        }
+
+        pub fn provisioned(cluster_configuration: ClusterConfiguration) -> Self {
+            ProvisionClusterResponse {
+                dry_run: false,
+                cluster_configuration: Some(cluster_configuration),
+            }
+        }
+    }
 
     /// Creates a new NodeCtlSvcClient with appropriate configuration
     pub fn new_node_ctl_client(channel: Channel) -> NodeCtlSvcClient<Channel> {

@@ -103,7 +103,7 @@ impl NetworkServer {
         );
 
         server_builder.register_grpc_service(
-            NodeCtlSvcHandler::new()
+            NodeCtlSvcHandler::new(metadata_writer.clone())
                 .into_server(&config.networking),
             restate_core::protobuf::node_ctl_svc::FILE_DESCRIPTOR_SET,
         );
@@ -176,7 +176,7 @@ impl NetworkServer {
     /// Start the external server (port 5122) with public services
     async fn start_external_server(
         mut server_builder: NetworkServerBuilder,
-        _metadata_writer: MetadataWriter,
+        metadata_writer: MetadataWriter,
         prometheus: Prometheus,
     ) -> Result<(), anyhow::Error> {
         let config = Configuration::pinned();
@@ -210,7 +210,7 @@ impl NetworkServer {
 
         // Register only external services
         server_builder.register_grpc_service(
-            NodeCtlSvcHandler::new()
+            NodeCtlSvcHandler::new(metadata_writer.clone())
                 .into_server(&config.networking),
             restate_core::protobuf::node_ctl_svc::FILE_DESCRIPTOR_SET,
         );
