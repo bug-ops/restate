@@ -124,6 +124,23 @@ pub struct CommonOptions {
     #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     pub advertised_address: AdvertisedAddress,
 
+    /// # Internal bind address
+    ///
+    /// Address to bind for the internal Node server. When set, the node will start a separate
+    /// internal server for node-to-node communication on this address.
+    /// If not set, all services will be exposed on a single server (backward compatibility).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
+    pub internal_bind_address: Option<BindAddress>,
+
+    /// # Internal advertised address
+    ///
+    /// Address that other nodes will use for internal node-to-node communication.
+    /// Only used when `internal_bind_address` is set. Default is `http://127.0.0.1:5123/`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
+    pub internal_advertised_address: Option<AdvertisedAddress>,
+
     /// # Partitions
     ///
     /// Number of partitions that will be provisioned during initial cluster provisioning.
@@ -433,6 +450,8 @@ impl Default for CommonOptions {
             metadata_client: MetadataClientOptions::default(),
             bind_address: None,
             advertised_address: AdvertisedAddress::from_str(DEFAULT_ADVERTISED_ADDRESS).unwrap(),
+            internal_bind_address: None,
+            internal_advertised_address: None,
             default_num_partitions: 24,
             default_replication: ReplicationProperty::new_unchecked(1),
             disable_prometheus: false,

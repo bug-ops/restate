@@ -10,7 +10,6 @@
 
 use std::cmp::max_by_key;
 
-use anyhow::Context;
 use bytes::BytesMut;
 use tonic::codec::CompressionEncoding;
 use tonic::{Request, Response, Status};
@@ -28,30 +27,23 @@ use restate_core::network::net_util::create_tonic_channel;
 use restate_core::protobuf::node_ctl_svc::node_ctl_svc_server::{NodeCtlSvc, NodeCtlSvcServer};
 use restate_core::protobuf::node_ctl_svc::{
     ClusterHealthResponse, EmbeddedMetadataClusterHealth, GetMetadataRequest, GetMetadataResponse,
-    IdentResponse, ProvisionClusterRequest, ProvisionClusterResponse,
+    IdentResponse,
 };
-use restate_core::{Identification, MetadataWriter};
+use restate_core::Identification;
 use restate_core::{Metadata, MetadataKind};
 use restate_metadata_store::{MetadataStoreClient, WriteError};
 use restate_types::Version;
 use restate_types::config::{Configuration, NetworkingOptions};
 use restate_types::errors::ConversionError;
-use restate_types::logs::metadata::{NodeSetSize, ProviderConfiguration};
 use restate_types::metadata::VersionedValue;
 use restate_types::nodes_config::Role;
-use restate_types::protobuf::cluster::ClusterConfiguration as ProtoClusterConfiguration;
-use restate_types::replication::ReplicationProperty;
 use restate_types::storage::StorageCodec;
 
-use crate::{ClusterConfiguration, provision_cluster_metadata};
-
-pub struct NodeCtlSvcHandler {
-    metadata_writer: MetadataWriter,
-}
+pub struct NodeCtlSvcHandler {}
 
 impl NodeCtlSvcHandler {
-    pub fn new(metadata_writer: MetadataWriter) -> Self {
-        Self { metadata_writer }
+    pub fn new() -> Self {
+        Self {}
     }
 
     pub fn into_server(self, config: &NetworkingOptions) -> NodeCtlSvcServer<Self> {
@@ -69,50 +61,6 @@ impl NodeCtlSvcHandler {
                 .send_compressed(CompressionEncoding::Zstd)
                 .send_compressed(CompressionEncoding::Gzip)
         }
-    }
-
-    fn resolve_cluster_configuration(
-        config: &Configuration,
-        request: ProvisionClusterRequest,
-    ) -> anyhow::Result<ClusterConfiguration> {
-        let num_partitions = request
-            .num_partitions
-            .map(|num_partitions| {
-                u16::try_from(num_partitions)
-                    .context("Restate only supports running up to 65535 partitions.")
-            })
-            .transpose()?
-            .unwrap_or(config.common.default_num_partitions);
-
-        let partition_replication: ReplicationProperty = request
-            .partition_replication
-            .map(TryInto::try_into)
-            .transpose()?
-            .unwrap_or_else(|| config.common.default_replication.clone());
-        let log_provider = request
-            .log_provider
-            .map(|log_provider| log_provider.parse())
-            .transpose()?
-            .unwrap_or(config.bifrost.default_provider);
-        let target_nodeset_size = request
-            .target_nodeset_size
-            .map(NodeSetSize::try_from)
-            .transpose()?
-            .unwrap_or(config.bifrost.replicated_loglet.default_nodeset_size);
-        let log_replication = request
-            .log_replication
-            .map(ReplicationProperty::try_from)
-            .transpose()?
-            .unwrap_or_else(|| config.common.default_replication.clone());
-
-        let provider_configuration =
-            ProviderConfiguration::from((log_provider, log_replication, target_nodeset_size));
-
-        Ok(ClusterConfiguration {
-            num_partitions,
-            partition_replication: partition_replication.into(),
-            bifrost_provider: provider_configuration,
-        })
     }
 }
 
@@ -155,42 +103,6 @@ impl NodeCtlSvc for NodeCtlSvcHandler {
         Ok(Response::new(GetMetadataResponse {
             encoded: encoded.freeze(),
         }))
-    }
-
-    async fn provision_cluster(
-        &self,
-        request: Request<ProvisionClusterRequest>,
-    ) -> Result<Response<ProvisionClusterResponse>, Status> {
-        let request = request.into_inner();
-        let config = Configuration::pinned();
-
-        let dry_run = request.dry_run;
-        let cluster_configuration = Self::resolve_cluster_configuration(&config, request)
-            .map_err(|err| Status::invalid_argument(err.to_string()))?;
-
-        if dry_run {
-            return Ok(Response::new(ProvisionClusterResponse::dry_run(
-                ProtoClusterConfiguration::from(cluster_configuration),
-            )));
-        }
-
-        let newly_provisioned = provision_cluster_metadata(
-            &self.metadata_writer,
-            &config.common,
-            &cluster_configuration,
-        )
-        .await
-        .map_err(|err| Status::internal(err.to_string()))?;
-
-        if !newly_provisioned {
-            return Err(Status::already_exists(
-                "The cluster has already been provisioned",
-            ));
-        }
-
-        Ok(Response::new(ProvisionClusterResponse::provisioned(
-            ProtoClusterConfiguration::from(cluster_configuration),
-        )))
     }
 
     async fn cluster_health(

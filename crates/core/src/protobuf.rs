@@ -30,8 +30,6 @@ pub mod node_ctl_svc {
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
 
-    use restate_types::protobuf::cluster::ClusterConfiguration;
-
     use crate::network::grpc::DEFAULT_GRPC_COMPRESSION;
 
     use self::node_ctl_svc_client::NodeCtlSvcClient;
@@ -40,6 +38,28 @@ pub mod node_ctl_svc {
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("node_ctl_svc_descriptor");
+
+    /// Creates a new NodeCtlSvcClient with appropriate configuration
+    pub fn new_node_ctl_client(channel: Channel) -> NodeCtlSvcClient<Channel> {
+        node_ctl_svc_client::NodeCtlSvcClient::new(channel)
+            // note: the order of those calls defines the priority
+            .accept_compressed(CompressionEncoding::Zstd)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(DEFAULT_GRPC_COMPRESSION)
+    }
+}
+
+pub mod internal_node_ctl_svc {
+    use tonic::codec::CompressionEncoding;
+    use tonic::transport::Channel;
+    use restate_types::protobuf::cluster::ClusterConfiguration;
+
+    use crate::network::grpc::DEFAULT_GRPC_COMPRESSION;
+
+    tonic::include_proto!("restate.internal_node_ctl_svc");
+
+    pub const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("internal_node_ctl_svc_descriptor");
 
     impl ProvisionClusterResponse {
         pub fn dry_run(cluster_configuration: ClusterConfiguration) -> Self {
@@ -57,9 +77,11 @@ pub mod node_ctl_svc {
         }
     }
 
-    /// Creates a new NodeCtlSvcClient with appropriate configuration
-    pub fn new_node_ctl_client(channel: Channel) -> NodeCtlSvcClient<Channel> {
-        node_ctl_svc_client::NodeCtlSvcClient::new(channel)
+    /// Creates a new InternalNodeCtlSvcClient with appropriate configuration
+    pub fn new_internal_node_ctl_client(
+        channel: Channel,
+    ) -> internal_node_ctl_svc_client::InternalNodeCtlSvcClient<Channel> {
+        internal_node_ctl_svc_client::InternalNodeCtlSvcClient::new(channel)
             // note: the order of those calls defines the priority
             .accept_compressed(CompressionEncoding::Zstd)
             .accept_compressed(CompressionEncoding::Gzip)

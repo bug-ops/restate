@@ -9,6 +9,7 @@
 // by the Apache License, Version 2.0.
 
 mod grpc_svc_handler;
+mod internal_grpc_svc_handler;
 mod metrics;
 mod pprof;
 mod prometheus_helpers;

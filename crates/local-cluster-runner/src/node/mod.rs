@@ -16,8 +16,8 @@ use futures::{FutureExt, Stream, StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use regex::{Regex, RegexSet};
 use restate_core::network::net_util::create_tonic_channel;
-use restate_core::protobuf::node_ctl_svc::{
-    ProvisionClusterRequest as ProtoProvisionClusterRequest, new_node_ctl_client,
+use restate_core::protobuf::internal_node_ctl_svc::{
+    ProvisionClusterRequest as ProtoProvisionClusterRequest, new_internal_node_ctl_client,
 };
 use restate_metadata_server_grpc::grpc::{
     RemoveNodeRequest, StatusResponse, new_metadata_server_client,
@@ -881,7 +881,7 @@ impl StartedNode {
             Some(60), // our test infra is sometimes slow until the node starts up
             Some(Duration::from_secs(1)),
         );
-        let client = new_node_ctl_client(channel);
+        let client = new_internal_node_ctl_client(channel);
 
         let response = retry_policy
             .retry(|| {

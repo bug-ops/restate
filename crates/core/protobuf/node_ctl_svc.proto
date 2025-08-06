@@ -10,7 +10,6 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
-import "restate/cluster.proto";
 import "restate/common.proto";
 
 package restate.node_ctl_svc;
@@ -22,36 +21,8 @@ service NodeCtlSvc {
   // Get metadata given the metadata kind
   rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
 
-  // Provision the Restate cluster on this node.
-  rpc ProvisionCluster(ProvisionClusterRequest)
-      returns (ProvisionClusterResponse);
-
   // Returns the cluster health from the point of view of this node.
   rpc ClusterHealth(google.protobuf.Empty) returns (ClusterHealthResponse);
-}
-
-message ProvisionClusterRequest {
-  bool dry_run = 1;
-  // if unset then the configured cluster num partitions will be used
-  optional uint32 num_partitions = 2;
-  // if unset partition replication will default to
-  // `admin.default-partition-replication`. Otherwise it's limited to the
-  // provided replication property
-  optional restate.cluster.ReplicationProperty partition_replication = 3;
-  // if unset then the configured cluster default log provider will be used
-  optional string log_provider = 4;
-  // only used if provider = "replicated"
-  // if unset then the configured cluster default log replication will be used
-  optional restate.cluster.ReplicationProperty log_replication = 5;
-  // only used if provider = "replicated"
-  // if unset then the configured cluster default target nodeset size will be
-  // used
-  optional uint32 target_nodeset_size = 6;
-}
-
-message ProvisionClusterResponse {
-  bool dry_run = 1;
-  restate.cluster.ClusterConfiguration cluster_configuration = 2;
 }
 
 message IdentResponse {
