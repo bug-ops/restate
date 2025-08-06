@@ -49,6 +49,15 @@ pub enum Destination {
     Node(GenerationalNodeId),
 }
 
+/// Type of connection to establish with a peer
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum ConnectionType {
+    /// Connection for external services (user-facing APIs)
+    External,
+    /// Connection for internal node-to-node communication
+    Internal,
+}
+
 #[derive(Clone, Copy, derive_more::Debug)]
 pub struct PeerMetadataVersion {
     logs: Version,

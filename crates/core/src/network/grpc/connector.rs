@@ -27,7 +27,7 @@ use crate::network::grpc::DEFAULT_GRPC_COMPRESSION;
 use crate::network::protobuf::core_node_svc::core_node_svc_client::CoreNodeSvcClient;
 use crate::network::protobuf::network::Message;
 use crate::network::transport_connector::find_node;
-use crate::network::{ConnectError, Destination, Swimlane, TransportConnect};
+use crate::network::{ConnectError, ConnectionType, Destination, Swimlane, TransportConnect};
 use crate::{Metadata, TaskCenter, TaskKind};
 
 #[derive(Clone, Default)]
@@ -39,14 +39,18 @@ impl TransportConnect for GrpcConnector {
     async fn connect(
         &self,
         destination: &Destination,
+        connection_type: ConnectionType,
         swimlane: Swimlane,
         output_stream: impl Stream<Item = Message> + Send + Unpin + 'static,
     ) -> Result<impl Stream<Item = Message> + Send + Unpin + 'static, ConnectError> {
         let address = match destination {
             Destination::Node(node_id) => {
-                find_node(&Metadata::with_current(|m| m.nodes_config_ref()), *node_id)?
-                    .address
-                    .clone()
+                let nodes_config = Metadata::with_current(|m| m.nodes_config_ref());
+                let node_config = find_node(&nodes_config, *node_id)?;
+                match connection_type {
+                    ConnectionType::External => node_config.external_address().clone(),
+                    ConnectionType::Internal => node_config.internal_address().clone(),
+                }
             }
             Destination::Address(address) => address.clone(),
         };

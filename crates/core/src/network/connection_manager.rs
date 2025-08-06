@@ -440,6 +440,7 @@ impl ConnectionManager {
             Destination::Address(restate_types::net::AdvertisedAddress::Uds(
                 "/tmp/fake".into(),
             )),
+            super::ConnectionType::Internal,
             swimlane,
             transport,
             direction,
@@ -558,6 +559,7 @@ impl ConnectionManager {
                         // future.
                         Connection::force_connect(
                             dest,
+                            super::ConnectionType::Internal,
                             swimlane,
                             transport_connector,
                             direction,

@@ -298,6 +298,7 @@ impl<'a> NodeInit<'a> {
                             .current_generation(my_node_id)
                             .location(common.location().clone())
                             .address(common.advertised_address.clone())
+                            .internal_address(common.internal_advertised_address.clone())
                             .roles(common.roles)
                             .metadata_server_config(MetadataServerConfig {
                                 metadata_server_state,

@@ -657,6 +657,7 @@ fn create_initial_nodes_configuration(common_opts: &CommonOptions) -> NodesConfi
         )
         .location(common_opts.location().clone())
         .address(common_opts.advertised_address.clone())
+        .internal_address(common_opts.internal_advertised_address.clone())
         .roles(common_opts.roles)
         .build();
     initial_nodes_configuration.upsert_node(node_config);

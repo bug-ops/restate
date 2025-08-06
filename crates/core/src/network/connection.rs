@@ -37,6 +37,7 @@ use crate::network::metric_definitions::NETWORK_CONNECTION_CREATED;
 use super::ConnectError;
 use super::ConnectionClosed;
 use super::ConnectionDirection;
+use super::ConnectionType;
 use super::Destination;
 use super::HandshakeError;
 use super::MessageRouter;
@@ -184,6 +185,7 @@ impl Connection {
     #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         destination: Destination,
+        connection_type: ConnectionType,
         swimlane: Swimlane,
         transport_connector: impl TransportConnect,
         direction: ConnectionDirection,
@@ -195,6 +197,7 @@ impl Connection {
         ConnectThrottle::may_connect(&destination)?;
         Self::force_connect(
             destination.clone(),
+            connection_type,
             swimlane,
             transport_connector,
             direction,
@@ -210,6 +213,7 @@ impl Connection {
     #[allow(clippy::too_many_arguments)]
     pub async fn force_connect(
         destination: Destination,
+        connection_type: ConnectionType,
         swimlane: Swimlane,
         transport_connector: impl TransportConnect,
         direction: ConnectionDirection,
@@ -220,6 +224,7 @@ impl Connection {
     ) -> Result<(Self, TaskId), ConnectError> {
         let result = Self::connect_inner(
             destination.clone(),
+            connection_type,
             swimlane,
             transport_connector,
             direction,
@@ -245,6 +250,7 @@ impl Connection {
     #[allow(clippy::too_many_arguments)]
     async fn connect_inner(
         destination: Destination,
+        connection_type: ConnectionType,
         swimlane: Swimlane,
         transport_connector: impl TransportConnect,
         direction: ConnectionDirection,
@@ -256,6 +262,7 @@ impl Connection {
         Self::connect_inner_with_node_id(
             None,
             destination,
+            connection_type,
             swimlane,
             transport_connector,
             direction,
@@ -271,6 +278,7 @@ impl Connection {
     pub(super) async fn connect_inner_with_node_id(
         my_node_id: Option<GenerationalNodeId>,
         destination: Destination,
+        connection_type: ConnectionType,
         swimlane: Swimlane,
         transport_connector: impl TransportConnect,
         direction: ConnectionDirection,
@@ -312,7 +320,7 @@ impl Connection {
 
         // Establish the connection
         let mut incoming = transport_connector
-            .connect(&destination, swimlane, egress)
+            .connect(&destination, connection_type, swimlane, egress)
             .await?;
 
         // finish the handshake

@@ -141,6 +141,11 @@ pub struct NodeConfig {
     pub name: String,
     pub current_generation: GenerationalNodeId,
     pub address: AdvertisedAddress,
+    /// Internal address for node-to-node communication. If not set, 
+    /// falls back to the main address for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default)]
+    pub internal_address: Option<AdvertisedAddress>,
     pub roles: EnumSet<Role>,
     #[serde(default)]
     #[builder(default)]
@@ -172,6 +177,7 @@ impl NodeConfig {
             name,
             current_generation,
             address,
+            internal_address: None,
             roles,
             log_server_config,
             location,
@@ -182,6 +188,22 @@ impl NodeConfig {
 
     pub fn has_role(&self, role: Role) -> bool {
         self.roles.contains(role)
+    }
+
+    /// Returns the external address for this node (used for external services)
+    pub fn external_address(&self) -> &AdvertisedAddress {
+        &self.address
+    }
+
+    /// Returns the internal address for this node (used for node-to-node communication).
+    /// Falls back to external address if internal address is not configured.
+    pub fn internal_address(&self) -> &AdvertisedAddress {
+        self.internal_address.as_ref().unwrap_or(&self.address)
+    }
+
+    /// Returns true if this node has a separate internal address configured
+    pub fn has_separate_internal_address(&self) -> bool {
+        self.internal_address.is_some()
     }
 }
 

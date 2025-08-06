@@ -16,7 +16,7 @@ use restate_types::NodeId;
 use restate_types::nodes_config::{NodeConfig, NodesConfigError, NodesConfiguration};
 
 use super::protobuf::network::Message;
-use super::{ConnectError, Destination, DiscoveryError, Swimlane};
+use super::{ConnectError, ConnectionType, Destination, DiscoveryError, Swimlane};
 
 /// Finds a node in nodes configuration by ID and maps the error to [`DiscoveryError`]
 pub fn find_node(
@@ -41,6 +41,7 @@ pub trait TransportConnect: Clone + Send + Sync + 'static {
     fn connect(
         &self,
         destination: &Destination,
+        connection_type: ConnectionType,
         swimlane: Swimlane,
         output_stream: impl Stream<Item = Message> + Send + Unpin + 'static,
     ) -> impl Future<
@@ -52,12 +53,13 @@ impl<T: TransportConnect> TransportConnect for std::sync::Arc<T> {
     fn connect(
         &self,
         destination: &Destination,
+        connection_type: ConnectionType,
         swimlane: Swimlane,
         output_stream: impl Stream<Item = Message> + Send + Unpin + 'static,
     ) -> impl Future<
         Output = Result<impl Stream<Item = Message> + Send + Unpin + 'static, ConnectError>,
     > + Send {
-        (**self).connect(destination, swimlane, output_stream)
+        (**self).connect(destination, connection_type, swimlane, output_stream)
     }
 }
 
@@ -133,6 +135,7 @@ pub mod test_util {
         async fn connect(
             &self,
             destination: &Destination,
+            _connection_type: ConnectionType,
             swimlane: Swimlane,
             mut output_stream: impl Stream<Item = Message> + Send + Unpin + 'static,
         ) -> Result<impl Stream<Item = Message> + Send + Unpin + 'static, ConnectError> {
@@ -218,6 +221,7 @@ pub mod test_util {
         async fn connect(
             &self,
             _destination: &Destination,
+            _connection_type: ConnectionType,
             _swimlane: Swimlane,
             _output_stream: impl Stream<Item = Message> + Send + Unpin + 'static,
         ) -> Result<impl Stream<Item = Message> + Send + Unpin + 'static, ConnectError> {
@@ -234,6 +238,7 @@ pub mod test_util {
         async fn connect(
             &self,
             _destination: &Destination,
+            _connection_type: ConnectionType,
             _swimlane: Swimlane,
             output_stream: impl Stream<Item = Message> + Send + Unpin + 'static,
         ) -> Result<impl Stream<Item = Message> + Send + Unpin + 'static, ConnectError> {
