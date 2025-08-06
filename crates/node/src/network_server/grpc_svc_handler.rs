@@ -286,3 +286,69 @@ impl MetadataProxySvc for MetadataProxySvcHandler {
         Ok(Response::new(()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use restate_core::TestCoreEnvBuilder;
+
+    #[restate_core::test]
+    async fn test_get_ident() {
+        let _env = TestCoreEnvBuilder::with_incoming_only_connector()
+            .add_mock_nodes_config()
+            .build()
+            .await;
+            
+        let handler = NodeCtlSvcHandler::new();
+
+        let response = handler
+            .get_ident(tonic::Request::new(()))
+            .await
+            .unwrap();
+
+        let ident = response.into_inner();
+        assert!(!ident.cluster_name.is_empty());
+        assert!(!ident.roles.is_empty());
+    }
+
+    #[restate_core::test]
+    async fn test_get_metadata_nodes_config() {
+        let _env = TestCoreEnvBuilder::with_incoming_only_connector()
+            .add_mock_nodes_config()
+            .build()
+            .await;
+
+        let handler = NodeCtlSvcHandler::new();
+
+        let request = GetMetadataRequest {
+            kind: restate_types::protobuf::common::MetadataKind::NodesConfiguration as i32,
+        };
+
+        let response = handler
+            .get_metadata(tonic::Request::new(request))
+            .await
+            .unwrap();
+
+        let metadata_response = response.into_inner();
+        assert!(!metadata_response.encoded.is_empty());
+    }
+
+    #[restate_core::test]
+    async fn test_cluster_health_provisioned() {
+        let _env = TestCoreEnvBuilder::with_incoming_only_connector()
+            .add_mock_nodes_config()
+            .build()
+            .await;
+
+        let handler = NodeCtlSvcHandler::new();
+
+        let response = handler
+            .cluster_health(tonic::Request::new(()))
+            .await;
+
+        // Should succeed since we have a provisioned cluster  
+        assert!(response.is_ok());
+        let cluster_health = response.unwrap().into_inner();
+        assert_eq!(cluster_health.cluster_name, "test-cluster");
+    }
+}
