@@ -77,6 +77,17 @@ pub struct Node {
                 self.base_config.common.tokio_console_bind_address = Some(BindAddress::Uds(tokio_console_socket));
                 self.base_config.common.advertised_address = AdvertisedAddress::Uds(node_socket);
             }
+            
+            pub fn with_split_mode_sockets(self) {
+                let node_socket: PathBuf = PathBuf::from(self.base_config.node_name()).join("node.sock");
+                let internal_socket: PathBuf = PathBuf::from(self.base_config.node_name()).join("node_internal.sock");
+                let tokio_console_socket: PathBuf = PathBuf::from(self.base_config.node_name()).join("tokio_console.sock");
+                self.base_config.common.bind_address = Some(BindAddress::Uds(node_socket.clone()));
+                self.base_config.common.advertised_address = AdvertisedAddress::Uds(node_socket);
+                self.base_config.common.internal_bind_address = Some(BindAddress::Uds(internal_socket.clone()));
+                self.base_config.common.internal_advertised_address = Some(AdvertisedAddress::Uds(internal_socket));
+                self.base_config.common.tokio_console_bind_address = Some(BindAddress::Uds(tokio_console_socket));
+            }
 
             pub fn with_random_ports(self) {
                 self.base_config.admin.bind_address =
@@ -170,6 +181,24 @@ impl Node {
 
         builder.build()
     }
+    
+    // Creates a new Node with split mode enabled - separate external and internal sockets
+    pub fn new_test_node_split_mode(
+        node_name: impl Into<String>,
+        base_config: Configuration,
+        binary_source: BinarySource,
+        roles: EnumSet<Role>,
+    ) -> Self {
+        let builder = Self::builder()
+            .binary_source(binary_source)
+            .base_config(base_config)
+            .with_node_name(node_name)
+            .with_split_mode_sockets()
+            .with_random_ports()
+            .with_roles(roles);
+
+        builder.build()
+    }
 
     /// Creates a set of [`Node`] that all run the [`Role::Admin`] and [`Role::MetadataServer`]
     /// roles and the embedded metadata store. Additionally, they will run the provided set of
@@ -197,6 +226,58 @@ impl Node {
             }
 
             let node = Self::new_test_node(
+                format!("node-{node_id}"),
+                effective_config,
+                binary_source.clone(),
+                roles,
+            );
+
+            nodes.push(node);
+        }
+
+        let node_addresses = vec![
+            nodes
+                .first()
+                .expect("to have at least one node")
+                .advertised_address()
+                .clone(),
+        ];
+
+        if roles.contains(Role::MetadataServer) {
+            // if we are running the replicated metadata server, then update client addresses
+            for node in &mut nodes {
+                *node.metadata_store_client_mut() = MetadataClientKind::Replicated {
+                    addresses: node_addresses.clone(),
+                }
+            }
+        }
+
+        nodes
+    }
+    
+    /// Creates a set of [`Node`] in split mode with separate external and internal servers
+    pub fn new_test_nodes_split_mode(
+        mut base_config: Configuration,
+        binary_source: BinarySource,
+        roles: EnumSet<Role>,
+        size: u32,
+        auto_provision: bool,
+    ) -> Vec<Self> {
+        let roles = roles | Role::Admin | Role::MetadataServer;
+        base_config.common.auto_provision = false;
+        base_config.common.log_disable_ansi_codes = true;
+
+        let mut nodes = Vec::new();
+        for i in 1..=size {
+            let node_id = PlainNodeId::from(i);
+            let mut effective_config = base_config.clone();
+            
+            if auto_provision && node_id == PlainNodeId::from(1) {
+                // First node should auto-provision partitions
+                effective_config.common.auto_provision = true;
+            }
+            
+            let node = Self::new_test_node_split_mode(
                 format!("node-{node_id}"),
                 effective_config,
                 binary_source.clone(),
@@ -264,6 +345,16 @@ impl Node {
         if let AdvertisedAddress::Uds(file) = &mut self.base_config.common.advertised_address {
             *file = base_dir.join(&*file)
         }
+        
+        // Handle internal addresses for split mode
+        if let Some(BindAddress::Uds(file)) = &mut self.base_config.common.internal_bind_address {
+            *file = base_dir.join(&*file);
+        }
+        
+        if let Some(AdvertisedAddress::Uds(file)) = &mut self.base_config.common.internal_advertised_address {
+            *file = base_dir.join(&*file)
+        }
+        
         if let Some(BindAddress::Uds(file)) =
             &mut self.base_config.common.tokio_console_bind_address
         {
