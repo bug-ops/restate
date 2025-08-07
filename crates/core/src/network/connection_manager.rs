@@ -613,6 +613,23 @@ impl ConnectionManager {
 
         Ok(maybe_connection?.0)
     }
+
+    /// Type-safe connection method using phantom types
+    pub async fn get_or_connect_typed_safe<C, CM, SM>(
+        &self,
+        node_id: impl Into<NodeId>,
+        _config: crate::network::routing::RoutingConfig<CM, SM>,
+        transport_connector: &C,
+    ) -> Result<Connection, ConnectError>
+    where
+        C: TransportConnect,
+        CM: crate::network::routing::ConnectionMarker,
+        SM: crate::network::routing::SwimlaneMarker,
+    {
+        let connection_type = CM::CONNECTION_TYPE;
+        let swimlane = SM::SWIMLANE;
+        self.get_or_connect_typed(node_id, swimlane, connection_type, transport_connector).await
+    }
 }
 
 impl ConnectionTracking for ConnectionManager {

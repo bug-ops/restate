@@ -18,6 +18,11 @@ use super::connection::OwnedSendPermit;
 use super::{ConnectError, Connection, ConnectionType, LazyConnection, RpcError};
 pub use crate::network::protobuf::network::Swimlane;
 
+// Import phantom types for type-safe routing
+use crate::network::routing::{
+    RoutingConfig, ConnectionMarker, SwimlaneMarker,
+};
+
 /// Send NetworkMessage to nodes
 pub trait NetworkSender: Clone + Send + Sync + 'static {
     /// Get a connection to a peer node with explicit connection type
@@ -81,4 +86,39 @@ pub trait NetworkSender: Clone + Send + Sync + 'static {
     where
         M: RpcRequest,
         N: Into<NodeId> + Send;
+
+    /// Type-safe connection method using phantom types
+    fn get_connection_typed_safe<N, C, S>(
+        &self,
+        node_id: N,
+        _config: RoutingConfig<C, S>,
+    ) -> impl std::future::Future<Output = Result<Connection, ConnectError>> + Send
+    where
+        N: Into<NodeId> + Send,
+        C: ConnectionMarker,
+        S: SwimlaneMarker,
+    {
+        let connection_type = C::CONNECTION_TYPE;
+        let swimlane = S::SWIMLANE;
+        self.get_connection_typed(node_id, swimlane, connection_type)
+    }
+
+    /// Type-safe RPC call using phantom types
+    fn call_rpc_typed_safe<M, N, C, S>(
+        &self,
+        node_id: N,
+        _config: RoutingConfig<C, S>,
+        message: M,
+        sort_code: Option<u64>,
+        timeout: Option<Duration>,
+    ) -> impl std::future::Future<Output = Result<M::Response, RpcError>> + Send
+    where
+        M: RpcRequest,
+        N: Into<NodeId> + Send,
+        C: ConnectionMarker,
+        S: SwimlaneMarker,
+    {
+        let swimlane = S::SWIMLANE;
+        self.call_rpc(node_id, swimlane, message, sort_code, timeout)
+    }
 }

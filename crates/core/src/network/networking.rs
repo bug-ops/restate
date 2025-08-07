@@ -189,3 +189,71 @@ impl<T: TransportConnect> NetworkSender for Networking<T> {
         }
     }
 }
+
+// Separate impl block for phantom type routing methods
+impl<T: TransportConnect> Networking<T> {
+    /// Type-safe auto-routing RPC call using phantom types
+    pub async fn call_rpc_auto_typed<M, N, C, S>(
+        &self,
+        node_id: N,
+        msg: M,
+        sort_code: Option<u64>,
+        _timeout: Option<Duration>,
+    ) -> Result<M::Response, RpcError>
+    where
+        M: RpcRequest,
+        N: Into<NodeId> + Send,
+        C: crate::network::routing::ConnectionMarker,
+        S: crate::network::routing::SwimlaneMarker,
+    {
+        // Type-safe routing using phantom type markers
+        let connection_type = C::CONNECTION_TYPE;
+        let swimlane = S::SWIMLANE;
+        
+        let connection = self
+            .connections
+            .get_or_connect_typed(node_id, swimlane, connection_type, &self.connector)
+            .await
+            .map_err(super::MessageSendError::from)?;
+            
+        let permit = match connection.reserve().await {
+            None => return Err(super::ConnectionClosed.into()),
+            Some(permit) => permit,
+        };
+        
+        let reply = permit
+            .send_rpc(msg, sort_code)
+            .map_err(super::MessageSendError::from)?;
+        Ok(reply.await?)
+    }
+
+    /// Service-specific auto-routing using phantom types and ServiceTag
+    pub async fn call_rpc_service_aware<M, N>(
+        &self,
+        node_id: N,
+        msg: M,
+        sort_code: Option<u64>,
+        timeout: Option<Duration>,
+    ) -> Result<M::Response, RpcError>
+    where
+        M: RpcRequest,
+        N: Into<NodeId> + Send,
+    {
+        use crate::network::routing::{Internal, External, General, Gossip};
+        
+        // ServiceTag-based routing with compile-time type safety
+        let connection_type = self.determine_connection_type_for_rpc::<M>(Swimlane::General);
+        
+        match (connection_type, M::Service::TAG) {
+            (ConnectionType::Internal, ServiceTag::GossipService) => {
+                self.call_rpc_auto_typed::<M, N, Internal, Gossip>(node_id, msg, sort_code, timeout).await
+            }
+            (ConnectionType::Internal, _) => {
+                self.call_rpc_auto_typed::<M, N, Internal, General>(node_id, msg, sort_code, timeout).await
+            }
+            (ConnectionType::External, _) => {
+                self.call_rpc_auto_typed::<M, N, External, General>(node_id, msg, sort_code, timeout).await
+            }
+        }
+    }
+}

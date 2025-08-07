@@ -15,7 +15,8 @@ use std::collections::hash_map::Entry;
 use ahash::HashMap;
 use tracing::{debug, info, trace};
 
-use restate_core::network::{NetworkSender as _, Networking, Swimlane, TransportConnect};
+use restate_core::network::{NetworkSender as _, Networking, TransportConnect};
+use restate_core::network::routing::{RoutingConfig, External, General};
 use restate_core::{Metadata, MetadataWriter, ShutdownError, SyncError, TaskCenter, TaskKind};
 use restate_metadata_store::{
     MetadataStoreClient, ReadError, ReadModifyWriteError, ReadWriteError, WriteError,
@@ -743,10 +744,9 @@ impl<T: TransportConnect> Scheduler<T> {
                         // potentially dead.
                         async move {
                             let Ok(connection) = networking
-                                .get_connection_typed(
+                                .get_connection_typed_safe(
                                     node_id, 
-                                    Swimlane::default(), 
-                                    restate_core::network::ConnectionType::External,
+                                    RoutingConfig::<External, General>::new(),
                                 )
                                 .await
                             else {

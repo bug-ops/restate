@@ -19,7 +19,8 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchReceiverStream;
 use tracing::debug;
 
-use restate_core::network::{Connection, NetworkSender, Networking, Swimlane, TransportConnect};
+use restate_core::network::{Connection, NetworkSender, Networking, TransportConnect};
+use restate_core::network::routing::{RoutingConfig, External, General};
 use restate_core::{TaskCenter, TaskCenterFutureExt, TaskKind, task_center};
 use restate_types::NodeId;
 use restate_types::identifiers::{PartitionId, PartitionKey};
@@ -236,10 +237,9 @@ impl<T: TransportConnect> RemoteScannerService for RemoteScannerServiceProxy<T> 
     ) -> Result<RemoteScanner, DataFusionError> {
         let connection = self
             .networking
-            .get_connection_typed(
+            .get_connection_typed_safe(
                 peer, 
-                Swimlane::default(),
-                restate_core::network::ConnectionType::External,
+                RoutingConfig::<External, General>::new(),
             )
             .in_tc_as_task(
                 &self.task_center,

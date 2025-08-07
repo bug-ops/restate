@@ -24,6 +24,7 @@ pub mod net_util;
 mod network_sender;
 mod networking;
 pub mod protobuf;
+pub mod routing;
 mod server_builder;
 pub mod tonic_service_filter;
 mod tracking;
@@ -41,6 +42,10 @@ pub use message_router::*;
 pub use network_sender::*;
 pub use networking::Networking;
 pub use protobuf::network::ConnectionDirection;
+pub use routing::{
+    RoutingConfig, RoutingBuilder, RoutingFactory, TypedNetworkSender, 
+    NetworkSenderExt, common_configs,
+};
 pub use server_builder::NetworkServerBuilder;
 pub use transport_connector::TransportConnect;
 pub use types::*;
