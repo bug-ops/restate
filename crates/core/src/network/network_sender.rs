@@ -15,19 +15,39 @@ use restate_types::{GenerationalNodeId, NodeId};
 
 // re-export Swimlane from protobuf
 use super::connection::OwnedSendPermit;
-use super::{ConnectError, Connection, LazyConnection, RpcError};
+use super::{ConnectError, Connection, ConnectionType, LazyConnection, RpcError};
 pub use crate::network::protobuf::network::Swimlane;
 
 /// Send NetworkMessage to nodes
 pub trait NetworkSender: Clone + Send + Sync + 'static {
-    /// Get a connection to a peer node
+    /// Get a connection to a peer node with explicit connection type
+    fn get_connection_typed<N>(
+        &self,
+        node_id: N,
+        swimlane: Swimlane,
+        connection_type: ConnectionType,
+    ) -> impl std::future::Future<Output = Result<Connection, ConnectError>> + Send
+    where
+        N: Into<NodeId> + Send;
+
+    /// Get a connection to a peer node (uses conservative default for connection type)
     fn get_connection<N>(
         &self,
         node_id: N,
         swimlane: Swimlane,
     ) -> impl std::future::Future<Output = Result<Connection, ConnectError>> + Send
     where
-        N: Into<NodeId> + Send;
+        N: Into<NodeId> + Send {
+        // Default implementation - conservative routing based on swimlane
+        let connection_type = match swimlane {
+            Swimlane::Gossip => ConnectionType::Internal,
+            Swimlane::BifrostData => ConnectionType::Internal,
+            Swimlane::IngressData => ConnectionType::External,
+            // Conservative default for General - prefer security
+            Swimlane::General => ConnectionType::Internal,
+        };
+        self.get_connection_typed(node_id, swimlane, connection_type)
+    }
 
     /// Gets a connection to a generational peer node, but does not block if the connection is not ready.
     ///

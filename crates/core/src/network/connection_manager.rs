@@ -22,7 +22,7 @@ use restate_types::config::Configuration;
 use restate_types::nodes_config::{ClusterFingerprint, NodesConfigError, NodesConfiguration};
 use restate_types::{GenerationalNodeId, Merge, NodeId, PlainNodeId};
 
-use super::Swimlane;
+use super::{ConnectionType, Swimlane};
 use super::connection::Connection;
 use super::io::{ConnectionReactor, EgressMessage, EgressStream};
 use super::protobuf::network::ConnectionDirection;
@@ -461,10 +461,11 @@ impl ConnectionManager {
 
     /// Gets an existing connection or creates a new one if no active connection exists. If
     /// multiple connections already exist, it returns a random one.
-    pub async fn get_or_connect<C>(
+    pub async fn get_or_connect_typed<C>(
         &self,
         node_id: impl Into<NodeId>,
         swimlane: Swimlane,
+        connection_type: ConnectionType,
         transport_connector: &C,
     ) -> Result<Connection, ConnectError>
     where
@@ -512,16 +513,38 @@ impl ConnectionManager {
         self.create_shared_connection(
             Destination::Node(node_id),
             swimlane,
+            connection_type,
             router,
             transport_connector,
         )
         .await
     }
 
+    /// Gets an existing connection or creates a new one with conservative default connection type
+    pub async fn get_or_connect<C>(
+        &self,
+        node_id: impl Into<NodeId>,
+        swimlane: Swimlane,
+        transport_connector: &C,
+    ) -> Result<Connection, ConnectError>
+    where
+        C: TransportConnect,
+    {
+        // Conservative default connection type based on swimlane
+        let connection_type = match swimlane {
+            Swimlane::Gossip => ConnectionType::Internal,
+            Swimlane::BifrostData => ConnectionType::Internal,
+            Swimlane::IngressData => ConnectionType::External,
+            Swimlane::General => ConnectionType::Internal, // Conservative default
+        };
+        self.get_or_connect_typed(node_id, swimlane, connection_type, transport_connector).await
+    }
+
     async fn create_shared_connection<C>(
         &self,
         dest: Destination,
         swimlane: Swimlane,
+        connection_type: ConnectionType,
         router: Arc<MessageRouter>,
         transport_connector: &C,
     ) -> Result<Connection, ConnectError>
@@ -559,7 +582,7 @@ impl ConnectionManager {
                         // future.
                         Connection::force_connect(
                             dest,
-                            super::ConnectionType::Internal,
+                            connection_type,
                             swimlane,
                             transport_connector,
                             direction,

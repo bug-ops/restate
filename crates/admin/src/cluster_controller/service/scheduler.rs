@@ -743,7 +743,11 @@ impl<T: TransportConnect> Scheduler<T> {
                         // potentially dead.
                         async move {
                             let Ok(connection) = networking
-                                .get_connection(node_id, Swimlane::default())
+                                .get_connection_typed(
+                                    node_id, 
+                                    Swimlane::default(), 
+                                    restate_core::network::ConnectionType::External,
+                                )
                                 .await
                             else {
                                 // ignore connection errors, no need to mark the task as failed

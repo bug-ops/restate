@@ -17,10 +17,12 @@ use tokio::time::Instant;
 
 use super::connection::OwnedSendPermit;
 use super::{
-    ConnectError, Connection, ConnectionClosed, ConnectionManager, LazyConnection,
+    ConnectError, Connection, ConnectionClosed, ConnectionManager, ConnectionType, LazyConnection,
     MessageSendError, NetworkSender, RpcError, Swimlane,
 };
 use super::{GrpcConnector, TransportConnect};
+use restate_types::config::Configuration;
+use restate_types::net::{Service, ServiceTag};
 
 /// Access to node-to-node networking infrastructure.
 pub struct Networking<T> {
@@ -42,6 +44,46 @@ impl Networking<GrpcConnector> {
         Self {
             connections: ConnectionManager::default(),
             connector: GrpcConnector::default(),
+        }
+    }
+}
+
+impl<T: TransportConnect> Networking<T> {
+    /// Determine ConnectionType based on ServiceTag for RPC calls
+    fn determine_connection_type_for_rpc<M: RpcRequest>(&self, swimlane: Swimlane) -> super::ConnectionType {
+        let config = Configuration::pinned();
+        
+        // Check if split mode is enabled
+        if config.common.internal_bind_address.is_none() {
+            // Unified mode - always use External (default port)
+            return super::ConnectionType::External;
+        }
+        
+        // Split mode - route based on ServiceTag
+        let service_tag = M::Service::TAG;
+        
+        match service_tag {
+            // Internal services - require encryption
+            ServiceTag::GossipService => super::ConnectionType::Internal,
+            ServiceTag::LogServerMetaService => super::ConnectionType::Internal,
+            ServiceTag::LogServerDataService => super::ConnectionType::Internal,
+            ServiceTag::SequencerMetaService => super::ConnectionType::Internal,
+            ServiceTag::SequencerDataService => super::ConnectionType::Internal,
+            ServiceTag::PartitionLeaderService => super::ConnectionType::Internal,
+            
+            // External services - safe for load balancer
+            ServiceTag::MetadataManagerService => super::ConnectionType::External,
+            ServiceTag::RemoteDataFusionService => super::ConnectionType::External,
+            ServiceTag::PartitionManagerService => super::ConnectionType::External,
+            
+            // Unknown/new services - fallback to swimlane-based routing
+            _ => match swimlane {
+                Swimlane::BifrostData => super::ConnectionType::Internal,
+                Swimlane::Gossip => super::ConnectionType::Internal,
+                Swimlane::IngressData => super::ConnectionType::External,
+                // Conservative default for General
+                Swimlane::General => super::ConnectionType::Internal,
+            }
         }
     }
 }
@@ -71,14 +113,15 @@ impl<T: TransportConnect> Networking<T> {
 }
 
 impl<T: TransportConnect> NetworkSender for Networking<T> {
-    /// Get a connection to a peer node
-    async fn get_connection<N: Into<NodeId>>(
+    /// Get a connection to a peer node with explicit connection type
+    async fn get_connection_typed<N: Into<NodeId>>(
         &self,
         node_id: N,
         swimlane: Swimlane,
+        connection_type: ConnectionType,
     ) -> Result<Connection, ConnectError> {
         self.connections
-            .get_or_connect(node_id, swimlane, &self.connector)
+            .get_or_connect_typed(node_id, swimlane, connection_type, &self.connector)
             .await
     }
 
@@ -121,9 +164,11 @@ impl<T: TransportConnect> NetworkSender for Networking<T> {
     {
         let start = Instant::now();
         let op = async {
+            // Auto-routing based on ServiceTag
+            let connection_type = self.determine_connection_type_for_rpc::<M>(swimlane);
             let connection = self
                 .connections
-                .get_or_connect(node_id, swimlane, &self.connector)
+                .get_or_connect_typed(node_id, swimlane, connection_type, &self.connector)
                 .await
                 .map_err(MessageSendError::from)?;
             let permit = match connection.reserve().await {
